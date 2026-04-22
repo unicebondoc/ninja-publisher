@@ -13,6 +13,12 @@ class Article:
     linkedin_hook: str | None = None
     notion_page_id: str | None = None
     canonical_url: str | None = None
+    hero_image_url: str | None = None
+    hook_options: list[str] = field(default_factory=list)
+    selected_hook: int | None = None
+    word_count: int | None = None
+    reading_time_minutes: int | None = None
+    publish_to: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
 
 

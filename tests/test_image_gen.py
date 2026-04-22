@@ -64,8 +64,9 @@ def test_generate_image_respects_aspect_ratio():
 
 @responses.activate
 def test_generate_image_raises_on_http_error():
+    import requests as _requests
     responses.add(responses.POST, MINIMAX_ENDPOINT, status=500, json={"error": "boom"})
-    with pytest.raises(Exception):
+    with pytest.raises(_requests.HTTPError):
         generate_image("s", api_key="k")
 
 

@@ -8,7 +8,30 @@ def test_article_defaults():
     assert a.tags == []
     assert a.subtitle is None
     assert a.canonical_url is None
+    assert a.hero_image_url is None
+    assert a.hook_options == []
+    assert a.selected_hook is None
+    assert a.word_count is None
+    assert a.reading_time_minutes is None
+    assert a.publish_to == []
     assert a.extra == {}
+
+
+def test_article_phase_b_fields_settable():
+    a = Article(
+        title="T", slug="t", body_markdown="# body",
+        hero_image_url="https://cdn.example/hero.jpg",
+        hook_options=[f"hook {i}" for i in range(10)],
+        selected_hook=3,
+        word_count=1234,
+        reading_time_minutes=6,
+        publish_to=["medium", "linkedin"],
+    )
+    assert a.hero_image_url == "https://cdn.example/hero.jpg"
+    assert len(a.hook_options) == 10
+    assert a.selected_hook == 3
+    assert a.reading_time_minutes == 6
+    assert a.publish_to == ["medium", "linkedin"]
 
 
 def test_publish_result_roundtrip():
