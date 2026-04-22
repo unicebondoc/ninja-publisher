@@ -171,6 +171,13 @@ def test_update_status(notion, fake_client):
     assert call["properties"] == {"Status": {"select": {"name": "Publishing"}}}
 
 
+def test_save_selected_hook(notion, fake_client):
+    notion.save_selected_hook("page_x", 7)
+    call = fake_client.pages.updated[0]
+    assert call["page_id"] == "page_x"
+    assert call["properties"] == {"Selected Hook": {"number": 7}}
+
+
 def test_save_platform_url_medium(notion, fake_client):
     notion.save_platform_url("page_x", "medium", "https://m.co/z")
     call = fake_client.pages.updated[0]

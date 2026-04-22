@@ -94,6 +94,14 @@ class NotionClient:
             },
         )
 
+    def save_selected_hook(self, page_id: str, hook_index: int) -> None:
+        self._client.pages.update(
+            page_id=page_id,
+            properties={
+                self.PROPS["selected_hook"]: {"number": hook_index},
+            },
+        )
+
     def save_platform_url(self, page_id: str, platform: str, url: str) -> None:
         prop = self.PLATFORM_URL_PROPS.get(platform)
         if not prop:
