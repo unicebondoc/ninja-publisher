@@ -2,3 +2,15 @@
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", "logs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]  # line length handled by formatter, long strings tolerated
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # allow assert in tests
