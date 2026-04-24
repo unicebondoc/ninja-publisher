@@ -87,7 +87,12 @@ else
   log "Running: sudo apt-get update"
   sudo apt-get update
   log "Running: sudo apt-get install -y ${MISSING[*]}"
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${MISSING[@]}"
+  # NOTE: no env var prefix on the sudo line. Butler's sudoers runs with
+  # env_reset and a minimal env_keep — passing VAR=value before sudo is
+  # rejected outright (set -e then kills the script). -y plus no TTY on
+  # stdin is sufficient for non-interactive apt; these 14 libs have no
+  # debconf prompts.
+  sudo apt-get install -y "${MISSING[@]}"
 fi
 
 # ---------------------------------------------------------------------------
