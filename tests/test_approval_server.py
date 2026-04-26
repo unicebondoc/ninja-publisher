@@ -3,7 +3,7 @@ import hmac
 import json
 import time
 import urllib.parse
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -11,6 +11,7 @@ from approval_server import (
     VERSION,
     SignatureError,
     create_app,
+    execute_publish,
     parse_slack_form,
     verify_slack_signature,
 )
@@ -184,11 +185,22 @@ def test_interact_rejects_stale_timestamp(client):
 
 def test_interact_approve_dispatches_publishing(client):
     c, slack, notion = client
-    r = _post(client, _payload(ACTION_APPROVE))
+    payload = _payload(ACTION_APPROVE)
+    payload["response_url"] = "https://hooks.slack.com/actions/T00/B00/xxx"
+    with patch("approval_server.threading.Thread") as mock_thread_cls:
+        mock_thread = MagicMock()
+        mock_thread_cls.return_value = mock_thread
+        r = _post(client, payload)
     assert r.status_code == 200
+    # Sync steps still happen
     notion.update_status.assert_called_once_with("page_abc", "Publishing")
     slack.update_card_status.assert_called_once()
     assert "Publishing" in slack.update_card_status.call_args.args[1]
+    # Thread was created with correct target and daemon flag
+    mock_thread_cls.assert_called_once()
+    assert mock_thread_cls.call_args.kwargs["target"] is execute_publish
+    assert mock_thread_cls.call_args.kwargs["daemon"] is True
+    mock_thread.start.assert_called_once()
 
 
 def test_interact_hook_stores_selection(client):
