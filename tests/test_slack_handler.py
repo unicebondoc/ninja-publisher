@@ -200,3 +200,31 @@ def test_parse_interaction_rejects_non_block_actions(handler):
 def test_parse_interaction_rejects_empty_actions(handler):
     with pytest.raises(SlackHandlerError, match="no actions"):
         handler.parse_interaction({"type": "block_actions", "actions": []})
+
+
+# ---- post_to_response_url (T13-T14) ----
+
+
+def test_post_to_response_url_happy_path(handler, mocker):
+    """T13: posts to response_url with replace_original."""
+    mock_post = mocker.patch("services.slack_handler.requests.post")
+    handler.post_to_response_url(
+        "https://hooks.slack.com/actions/T00/B00/xxx",
+        "Published: https://medium.com/p/123",
+    )
+    mock_post.assert_called_once_with(
+        "https://hooks.slack.com/actions/T00/B00/xxx",
+        json={
+            "text": "Published: https://medium.com/p/123",
+            "replace_original": True,
+        },
+        timeout=10,
+    )
+
+
+def test_post_to_response_url_ssrf_rejection(handler, mocker):
+    """T14: rejects non-Slack URLs (SSRF guard)."""
+    mock_post = mocker.patch("services.slack_handler.requests.post")
+    with pytest.raises(ValueError, match="https://hooks.slack.com/"):
+        handler.post_to_response_url("https://evil.com/hook", "pwned")
+    mock_post.assert_not_called()

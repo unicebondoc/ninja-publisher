@@ -63,6 +63,25 @@ class NotionClient:
 
     # ---- queries ----
 
+    def get_article(self, page_id: str) -> Article:
+        """Fetch a single Notion page by ID and return a hydrated Article."""
+        try:
+            page = self._client.pages.retrieve(page_id=page_id)
+        except Exception as exc:
+            msg = str(exc)
+            if "404" in msg or "not_found" in msg.lower() or "Could not find" in msg:
+                raise ValueError(f"Page not found: {page_id}") from exc
+            raise
+        return self._article_from_page(page)
+
+    def get_status(self, page_id: str) -> str:
+        """Fetch a single page and return its status property string."""
+        page = self._client.pages.retrieve(page_id=page_id)
+        props = page.get("properties") or {}
+        status_prop = props.get(self.PROPS["status"], {})
+        select = status_prop.get("select") or {}
+        return select.get("name", "")
+
     def query_rows_by_status(self, status: str) -> list[Article]:
         resp = self._client.databases.query(
             database_id=self.db_id,

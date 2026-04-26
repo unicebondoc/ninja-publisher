@@ -20,7 +20,9 @@ class FakePages:
     def __init__(self):
         self.created = []
         self.updated = []
+        self.retrieved = []
         self.next_create_response = {"id": "page_new"}
+        self.next_retrieve_response: dict | Exception | None = None
 
     def create(self, **kwargs):
         self.created.append(kwargs)
@@ -28,6 +30,14 @@ class FakePages:
 
     def update(self, **kwargs):
         self.updated.append(kwargs)
+        return {"id": kwargs.get("page_id"), "properties": {}}
+
+    def retrieve(self, **kwargs):
+        self.retrieved.append(kwargs)
+        if isinstance(self.next_retrieve_response, Exception):
+            raise self.next_retrieve_response
+        if self.next_retrieve_response is not None:
+            return self.next_retrieve_response
         return {"id": kwargs.get("page_id"), "properties": {}}
 
 
@@ -215,3 +225,38 @@ def test_log_error_truncates_long_messages(notion, fake_client):
     notion.log_error("page_x", "medium", "x" * 5000)
     written = fake_client.pages.updated[0]["properties"]["Last Error"]["rich_text"][0]["text"]["content"]
     assert len(written) <= 2000
+
+
+# ---- get_article / get_status (T10-T12) ----
+
+
+def test_get_article_happy_path(notion, fake_client):
+    """T10: get_article returns hydrated Article from pages.retrieve."""
+    fake_client.pages.next_retrieve_response = _page()
+    article = notion.get_article("page_1")
+    assert isinstance(article, Article)
+    assert article.title == "T"
+    assert article.slug == "t-slug"
+    assert article.notion_page_id == "page_1"
+    assert article.tags == ["ai", "ops"]
+    assert fake_client.pages.retrieved == [{"page_id": "page_1"}]
+
+
+def test_get_article_missing_page_raises(notion, fake_client):
+    """T11: get_article raises ValueError on 404."""
+    fake_client.pages.next_retrieve_response = RuntimeError(
+        "Could not find page with ID: page_missing. (404)"
+    )
+    with pytest.raises(ValueError, match="Page not found"):
+        notion.get_article("page_missing")
+
+
+def test_get_status_returns_status_string(notion, fake_client):
+    """T12: get_status returns the status select name."""
+    fake_client.pages.next_retrieve_response = {
+        "id": "page_x",
+        "properties": {
+            "Status": {"select": {"name": "Publishing"}},
+        },
+    }
+    assert notion.get_status("page_x") == "Publishing"
