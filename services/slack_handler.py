@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+import requests
 from slack_sdk import WebClient
 
 from base import Article
@@ -73,6 +74,19 @@ class SlackHandler:
                     "text": {"type": "mrkdwn", "text": f"*Status:* {new_status}"},
                 }
             ],
+        )
+
+    def post_to_response_url(self, response_url: str, text: str) -> None:
+        """POST a message to a Slack response_url with SSRF guard."""
+        if not response_url.startswith("https://hooks.slack.com/"):
+            raise ValueError(
+                f"response_url must start with https://hooks.slack.com/, "
+                f"got: {response_url!r}"
+            )
+        requests.post(
+            response_url,
+            json={"text": text, "replace_original": True},
+            timeout=10,
         )
 
     def parse_interaction(self, payload: dict) -> InteractionEvent:
