@@ -4,3 +4,4 @@ notion-client>=2.2,<3
 slack-sdk>=3.27,<4
 flask>=3.0,<4
 python-slugify>=8.0,<9
+PyYAML>=6.0,<7
