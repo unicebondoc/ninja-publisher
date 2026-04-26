@@ -37,6 +37,13 @@ Medium API integration. Sets `canonicalUrl = https://unicebondoc.com/blog/{slug}
 (overridable via `CANONICAL_BASE_URL`) so Medium rel=canonical's back to the
 portfolio. Caps tags at 5.
 
+Pass `dry_run=True` to preview what would happen without hitting the API:
+
+```python
+pub = MediumPublisher(token="...", dry_run=True)
+result = pub.publish(article, images=[])  # logs title, tags, endpoints — zero HTTP calls
+```
+
 ### `services/image_gen.py`
 MiniMax `image-01` wrapper. Locked brand prompt: bioluminescent / purple / teal
 / Filipino mystical / editorial / no text. Defaults to 16:9 for heroes; caller
