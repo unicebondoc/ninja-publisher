@@ -191,7 +191,8 @@ def test_execute_publish_medium_failure():
     notion.log_error.assert_called_once()
     error_msg = notion.log_error.call_args.args[2]
     assert "rate limited" in error_msg.lower() or "429" in error_msg
-    notion.update_status.assert_called_once_with(PAGE_ID, "Errored")
+    # log_error already sets status to "Errored" internally — no separate call
+    notion.update_status.assert_not_called()
     slack.post_to_response_url.assert_called_once()
     assert "Publish failed:" in slack.post_to_response_url.call_args.args[1]
     telegram.notify.assert_called_once()
@@ -242,7 +243,8 @@ def test_execute_publish_notion_fetch_failure():
 
     publisher.publish.assert_not_called()
     notion.log_error.assert_called_once()
-    notion.update_status.assert_called_once_with(PAGE_ID, "Errored")
+    # log_error already sets status to "Errored" internally — no separate call
+    notion.update_status.assert_not_called()
     slack.post_to_response_url.assert_called_once()
     assert "Publish failed:" in slack.post_to_response_url.call_args.args[1]
 

@@ -36,7 +36,7 @@ log = logging.getLogger("approval_server")
 
 _RE_BEARER_TOKEN = re.compile(r"(Bearer\s+\S+|token=\S+)")
 _RE_INTERNAL_URL = re.compile(
-    r"https?://(?!medium\.com|hooks\.slack\.com)\S+"
+    r"https?://(?!medium\.com[/\s]|medium\.com$|hooks\.slack\.com[/\s]|hooks\.slack\.com$)\S+"
 )
 _SANITIZE_MAX_LEN = 200
 
@@ -146,9 +146,8 @@ def create_app(
         except Exception:  # noqa: BLE001 — never 500 to Slack; log + ack
             log.exception("dispatch_action failed for action_id=%s", event.action_id)
             response_body = {"text": ":warning: action failed — check server logs"}
-        # Slack expects 200 within 3s. We do our dispatch sync for now
-        # (each op is one Notion + one Slack API call — well under 3s); if
-        # this grows, move to a thread + response_url flow.
+        # Slack expects 200 within 3s; heavy work (publish) runs in a
+        # background thread that posts back via response_url.
         return jsonify(response_body)
 
     return app
@@ -190,7 +189,7 @@ def execute_publish(
         slack.post_to_response_url(response_url, f"Published: {result.url}")
         try:
             telegram.notify(
-                f"Published <b>{article_title}</b>: {result.url}"
+                f"Published <b>{article.title}</b>: {result.url}"
             )
         except Exception:  # noqa: BLE001 — fire-and-forget
             log.warning("telegram notify failed (non-fatal) for %s", page_id)
@@ -199,7 +198,6 @@ def execute_publish(
         safe = sanitize_error(exc)
         try:
             notion.log_error(page_id, "medium", safe)
-            notion.update_status(page_id, "Errored")
         except Exception:  # noqa: BLE001
             log.exception("failed to update Notion error state for %s", page_id)
         try:
