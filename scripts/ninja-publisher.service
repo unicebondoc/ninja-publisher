@@ -1,0 +1,17 @@
+[Unit]
+Description=ninja-publisher Slack approval server (Phase E)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/uniceadmin/ninja-clan/agent-teams/worktrees/ninja-publisher
+EnvironmentFile=/home/uniceadmin/ninja-clan/agent-teams/worktrees/ninja-publisher/.env
+ExecStart=/home/uniceadmin/ninja-clan/agent-teams/worktrees/ninja-publisher/.venv/bin/python /home/uniceadmin/ninja-clan/agent-teams/worktrees/ninja-publisher/approval_server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
