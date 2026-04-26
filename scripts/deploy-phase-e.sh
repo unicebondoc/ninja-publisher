@@ -47,22 +47,22 @@ while IFS= read -r line; do
     [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]] && continue
 
     if [[ "${line}" =~ ^export[[:space:]] ]]; then
-        echo "WARNING: 'export' prefix found: ${line}"
+        echo "WARNING: 'export' prefix found on key: ${line%%=*}"
         ENV_WARNINGS=$((ENV_WARNINGS + 1))
     fi
     if [[ "${line}" =~ ^[A-Za-z_]+=\".*\" ]]; then
-        echo "WARNING: quoted value found: ${line}"
+        echo "WARNING: quoted value found on key: ${line%%=*}"
         ENV_WARNINGS=$((ENV_WARNINGS + 1))
     fi
     if [[ "${line}" =~ ^[A-Za-z_]+=.*[[:space:]]#.* ]]; then
-        echo "WARNING: inline comment found: ${line}"
+        echo "WARNING: inline comment found on key: ${line%%=*}"
         ENV_WARNINGS=$((ENV_WARNINGS + 1))
     fi
     if [[ "${line}" =~ ^[A-Za-z_]+[[:space:]]+= || "${line}" =~ =[[:space:]]+ ]]; then
         # Check for spaces around = but not in values
         key_part="${line%%=*}"
         if [[ "${key_part}" =~ [[:space:]] ]]; then
-            echo "WARNING: space before '=' found: ${line}"
+            echo "WARNING: space before '=' found on key: ${line%%=*}"
             ENV_WARNINGS=$((ENV_WARNINGS + 1))
         fi
     fi
@@ -151,6 +151,12 @@ systemctl --user daemon-reload
 systemctl --user enable ninja-publisher
 systemctl --user restart ninja-publisher
 echo "ninja-publisher service restarted."
+
+# Check linger (needed for user services to survive reboot)
+if ! loginctl show-user "$(whoami)" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then
+    echo "WARNING: linger not enabled. Service may not survive reboot."
+    echo "Run: loginctl enable-linger $(whoami)"
+fi
 
 if [ "${TUNNEL_CHANGED}" -eq 1 ]; then
     echo "Tunnel config changed — restarting cloudflared..."
