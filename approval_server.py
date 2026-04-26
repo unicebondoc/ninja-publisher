@@ -15,6 +15,7 @@ from typing import Any
 
 from flask import Flask, Response, jsonify, request
 
+from base import BasePublisher
 from services.notion_client import NotionClient
 from services.slack_handler import (
     ACTION_APPROVE,
@@ -147,6 +148,68 @@ def create_app(
         return jsonify(response_body)
 
     return app
+
+
+def execute_publish(
+    notion: NotionClient,
+    slack: SlackHandler,
+    publisher: BasePublisher | None,
+    telegram: Any,
+    page_id: str,
+    response_url: str,
+    article_title: str,
+) -> None:
+    """Background thread target: fetch article, publish, update status."""
+    if publisher is None:
+        slack.post_to_response_url(
+            response_url, "Publish failed: publisher not configured"
+        )
+        return
+
+    try:
+        # Double-tap guard: abort if status moved away from Publishing
+        status = notion.get_status(page_id)
+        if status != "Publishing":
+            log.info(
+                "double-tap guard: page %s status is %r, skipping publish",
+                page_id,
+                status,
+            )
+            return
+
+        article = notion.get_article(page_id)
+        result = publisher.publish(article, images=[])
+
+        # Success path
+        notion.save_platform_url(page_id, "medium", result.url)
+        notion.update_status(page_id, "Published")
+        slack.post_to_response_url(response_url, f"Published: {result.url}")
+        try:
+            telegram.notify(
+                f"Published <b>{article_title}</b>: {result.url}"
+            )
+        except Exception:  # noqa: BLE001 — fire-and-forget
+            log.warning("telegram notify failed (non-fatal) for %s", page_id)
+
+    except Exception as exc:  # noqa: BLE001 — catch-all for error path
+        safe = sanitize_error(exc)
+        try:
+            notion.log_error(page_id, "medium", safe)
+            notion.update_status(page_id, "Errored")
+        except Exception:  # noqa: BLE001
+            log.exception("failed to update Notion error state for %s", page_id)
+        try:
+            slack.post_to_response_url(
+                response_url, f"Publish failed: {safe}"
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("failed to post error to Slack for %s", page_id)
+        try:
+            telegram.notify(
+                f"Publish FAILED for {article_title}: {safe}", urgent=True
+            )
+        except Exception:  # noqa: BLE001 — fire-and-forget
+            log.warning("telegram urgent notify failed for %s", page_id)
 
 
 def dispatch_action(app: Flask, event: InteractionEvent) -> dict[str, Any]:
