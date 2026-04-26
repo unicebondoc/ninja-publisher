@@ -14,6 +14,7 @@ import time
 import urllib.parse
 from typing import Any
 
+from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
 
 from base import BasePublisher
@@ -266,6 +267,7 @@ def dispatch_action(app: Flask, event: InteractionEvent) -> dict[str, Any]:
 
 
 def _build_default_app() -> Flask:
+    load_dotenv(override=False)
     from publishers.medium import MediumPublisher
 
     slack_handler: SlackHandler | None = None
