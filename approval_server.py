@@ -8,6 +8,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 from typing import Any
@@ -29,6 +30,22 @@ SLACK_REPLAY_WINDOW_SECONDS = 60 * 5
 NOTION_PAGE_URL_TEMPLATE = "https://www.notion.so/{page_id_nodashes}"
 
 log = logging.getLogger("approval_server")
+
+_RE_BEARER_TOKEN = re.compile(r"(Bearer\s+\S+|token=\S+)")
+_RE_INTERNAL_URL = re.compile(
+    r"https?://(?!medium\.com|hooks\.slack\.com)\S+"
+)
+_SANITIZE_MAX_LEN = 200
+
+
+def sanitize_error(error: Exception | str) -> str:
+    """Redact secrets and internal URLs from error messages for Slack output."""
+    text = str(error)
+    text = _RE_BEARER_TOKEN.sub("[REDACTED]", text)
+    text = _RE_INTERNAL_URL.sub("[URL_REDACTED]", text)
+    if len(text) > _SANITIZE_MAX_LEN:
+        text = text[:_SANITIZE_MAX_LEN]
+    return text
 
 
 class SignatureError(ValueError):
