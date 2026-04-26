@@ -1,9 +1,88 @@
 """Tests for end-to-end approval orchestration (execute_publish + dispatch wiring)."""
 
-from unittest.mock import MagicMock
+import hashlib
+import hmac
+import json
+import time
+import urllib.parse
+from unittest.mock import MagicMock, patch
 
-from approval_server import execute_publish, sanitize_error
+from approval_server import create_app, execute_publish, sanitize_error
 from base import Article, PublishResult
+from services.slack_handler import ACTION_APPROVE, SlackHandler
+
+SIGNING_SECRET = "test-signing-secret"
+
+
+def _sign(body: bytes, ts: str | None = None) -> tuple[str, str]:
+    ts = ts or str(int(time.time()))
+    base = b"v0:" + ts.encode() + b":" + body
+    sig = "v0=" + hmac.new(SIGNING_SECRET.encode(), base, hashlib.sha256).hexdigest()
+    return ts, sig
+
+
+def _form_body(payload: dict) -> bytes:
+    return urllib.parse.urlencode({"payload": json.dumps(payload)}).encode()
+
+
+def _payload(action_id: str, value: str = "page_abc") -> dict:
+    return {
+        "type": "block_actions",
+        "user": {"id": "U42"},
+        "container": {"message_ts": "1700000000.000100"},
+        "response_url": "https://hooks.slack.com/actions/T00/B00/xxx",
+        "actions": [{"action_id": action_id, "value": value, "type": "button"}],
+    }
+
+
+# ---- T1: dispatch_action spawns thread ----
+
+
+def test_approve_spawns_daemon_thread_and_returns_immediately():
+    """T1: POST approve returns 200 immediately, thread started with daemon=True."""
+    slack = MagicMock(spec=SlackHandler)
+    real_handler = SlackHandler(token="t", channel_id="C", client=MagicMock())
+    slack.parse_interaction.side_effect = real_handler.parse_interaction
+
+    notion = MagicMock()
+
+    app = create_app(
+        signing_secret=SIGNING_SECRET,
+        slack=slack,
+        notion=notion,
+    )
+    client = app.test_client()
+    body = _form_body(_payload(ACTION_APPROVE))
+    ts, sig = _sign(body)
+
+    with patch("approval_server.threading.Thread") as mock_thread_cls:
+        mock_thread = MagicMock()
+        mock_thread_cls.return_value = mock_thread
+
+        r = client.post(
+            "/slack/interact",
+            data=body,
+            headers={
+                "X-Slack-Request-Timestamp": ts,
+                "X-Slack-Signature": sig,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+
+    assert r.status_code == 200
+    assert r.get_json()["text"] == "publishing queued"
+
+    # Thread was created with daemon=True and started
+    mock_thread_cls.assert_called_once()
+    call_kwargs = mock_thread_cls.call_args
+    assert call_kwargs.kwargs["daemon"] is True
+    assert call_kwargs.kwargs["target"] is execute_publish
+    mock_thread.start.assert_called_once()
+
+    # Sync steps still happened
+    notion.update_status.assert_called_once_with("page_abc", "Publishing")
+    slack.update_card_status.assert_called_once()
+
 
 # ---- sanitize_error (T9) ----
 

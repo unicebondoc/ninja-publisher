@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import urllib.parse
 from typing import Any
@@ -16,6 +17,7 @@ from typing import Any
 from flask import Flask, Response, jsonify, request
 
 from base import BasePublisher
+from services import telegram_notify
 from services.notion_client import NotionClient
 from services.slack_handler import (
     ACTION_APPROVE,
@@ -96,12 +98,14 @@ def create_app(
     slack: SlackHandler | None = None,
     notion: NotionClient | None = None,
     notion_url_template: str = NOTION_PAGE_URL_TEMPLATE,
+    medium_publisher: BasePublisher | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["SIGNING_SECRET"] = signing_secret or os.environ.get("SLACK_SIGNING_SECRET", "")
     app.config["SLACK"] = slack
     app.config["NOTION"] = notion
     app.config["NOTION_URL_TEMPLATE"] = notion_url_template
+    app.config["MEDIUM_PUBLISHER"] = medium_publisher
 
     @app.get("/health")
     def health() -> Response:
@@ -216,6 +220,7 @@ def dispatch_action(app: Flask, event: InteractionEvent) -> dict[str, Any]:
     notion: NotionClient | None = app.config["NOTION"]
     slack: SlackHandler | None = app.config["SLACK"]
     tmpl: str = app.config["NOTION_URL_TEMPLATE"]
+    publisher: BasePublisher | None = app.config.get("MEDIUM_PUBLISHER")
 
     if not event.notion_page_id:
         return {"text": ":warning: no Notion page id attached to action"}
@@ -231,7 +236,21 @@ def dispatch_action(app: Flask, event: InteractionEvent) -> dict[str, Any]:
         if notion is not None:
             notion.update_status(event.notion_page_id, "Publishing")
         if slack is not None:
-            slack.update_card_status(event.message_ts, "Publishing…")
+            slack.update_card_status(event.message_ts, "Publishing\u2026")
+        if notion is not None and slack is not None and event.response_url:
+            threading.Thread(
+                target=execute_publish,
+                args=(
+                    notion,
+                    slack,
+                    publisher,
+                    telegram_notify,
+                    event.notion_page_id,
+                    event.response_url,
+                    event.notion_page_id,  # article_title fallback
+                ),
+                daemon=True,
+            ).start()
         return {"text": "publishing queued"}
 
     if event.action_id == ACTION_EDIT:
@@ -249,8 +268,11 @@ def dispatch_action(app: Flask, event: InteractionEvent) -> dict[str, Any]:
 
 
 def _build_default_app() -> Flask:
+    from publishers.medium import MediumPublisher
+
     slack_handler: SlackHandler | None = None
     notion_client: NotionClient | None = None
+    medium_pub: BasePublisher | None = None
     try:
         slack_handler = SlackHandler()
     except Exception as e:  # noqa: BLE001 — server must still boot for /health
@@ -259,7 +281,15 @@ def _build_default_app() -> Flask:
         notion_client = NotionClient()
     except Exception as e:  # noqa: BLE001
         log.warning("NotionClient init deferred: %s", e)
-    return create_app(slack=slack_handler, notion=notion_client)
+    try:
+        medium_pub = MediumPublisher()
+    except Exception as e:  # noqa: BLE001
+        log.warning("MediumPublisher init deferred: %s", e)
+    return create_app(
+        slack=slack_handler,
+        notion=notion_client,
+        medium_publisher=medium_pub,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
