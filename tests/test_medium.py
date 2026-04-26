@@ -112,3 +112,14 @@ def test_publish_error_on_post_failure():
     with pytest.raises(PublishError) as ei:
         pub.publish(_article(), images=[])
     assert ei.value.status == 500
+
+
+@responses.activate
+def test_publish_dry_run_no_http_calls():
+    pub = MediumPublisher(token="t", dry_run=True)
+    result = pub.publish(_article(), images=[])
+    assert result.platform == "medium"
+    assert result.url == "dry-run"
+    assert result.id == "dry-run"
+    assert result.raw["dry_run"] is True
+    assert len(responses.calls) == 0

@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Any
 
@@ -8,6 +9,8 @@ from base import Article, BasePublisher, PublishError, PublishResult
 MEDIUM_API = "https://api.medium.com/v1"
 DEFAULT_CANONICAL_BASE = "https://unicebondoc.com/blog"
 
+log = logging.getLogger("medium")
+
 
 class MediumPublisher(BasePublisher):
     platform = "medium"
@@ -17,7 +20,9 @@ class MediumPublisher(BasePublisher):
         token: str | None = None,
         canonical_base: str | None = None,
         session: requests.Session | None = None,
+        dry_run: bool = False,
     ):
+        self.dry_run = dry_run
         self.token = token or os.environ.get("MEDIUM_TOKEN")
         if not self.token:
             raise PublishError(self.platform, "MEDIUM_TOKEN is not set")
@@ -55,6 +60,21 @@ class MediumPublisher(BasePublisher):
         return article.canonical_url or f"{self.canonical_base}/{article.slug}"
 
     def publish(self, article: Article, images: list[bytes]) -> PublishResult:
+        if self.dry_run:
+            log.info("[DRY RUN] Would publish to Medium:")
+            log.info("  Title:       %s", article.title)
+            log.info("  Tags:        %s", article.tags[:5])
+            log.info("  Canonical:   %s", self.canonical_url_for(article))
+            log.info("  Body preview: %s", article.body_markdown[:500])
+            log.info("  API calls that would be made:")
+            log.info("    GET  %s/me", MEDIUM_API)
+            log.info("    POST %s/users/{user_id}/posts", MEDIUM_API)
+            return PublishResult(
+                platform=self.platform,
+                url="dry-run",
+                id="dry-run",
+                raw={"dry_run": True, "title": article.title, "tags": article.tags[:5]},
+            )
         user_id = self._get_user_id()
         canonical = self.canonical_url_for(article)
         payload: dict[str, Any] = {
