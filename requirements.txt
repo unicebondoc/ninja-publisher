@@ -5,3 +5,5 @@ slack-sdk>=3.27,<4
 flask>=3.0,<4
 python-slugify>=8.0,<9
 PyYAML>=6.0,<7
+playwright>=1.44,<2
+Markdown>=3.6,<4
