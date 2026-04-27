@@ -261,12 +261,15 @@ class TelegramBot:
         msg: dict,
         on_topic: Callable[[str, str, int], None],
     ) -> None:
-        """Handle an incoming text message as a topic request."""
+        """Handle an incoming text message.
+
+        Drafting is gated behind ``/draft <topic>`` so casual chat doesn't
+        accidentally kick off an article. ``/start`` and ``/help`` show usage.
+        Anything else is ignored silently — leaves room for other bots
+        (e.g. Butler) sharing the same chat.
+        """
         text = (msg.get("text") or "").strip()
         if not text:
-            return
-        # Ignore bot commands (e.g. /start, /help)
-        if text.startswith("/"):
             return
         chat = msg.get("chat", {})
         chat_id = str(chat.get("id", ""))
@@ -275,8 +278,31 @@ class TelegramBot:
         if chat_id != str(self.chat_id):
             log.debug("ignoring message from chat %s (expected %s)", chat_id, self.chat_id)
             return
-        log.info("topic request from chat %s: %s", chat_id, text[:80])
-        on_topic(chat_id, text, message_id)
+
+        # Strip optional bot mention suffix: "/draft@MyBot foo" -> "/draft foo"
+        first_token, _, rest = text.partition(" ")
+        cmd = first_token.split("@", 1)[0].lower()
+
+        if cmd == "/draft":
+            topic = rest.strip()
+            if not topic:
+                self.send_message(chat_id, "Usage: <code>/draft &lt;topic&gt;</code>")
+                return
+            log.info("draft command from chat %s: %s", chat_id, topic[:80])
+            on_topic(chat_id, topic, message_id)
+            return
+
+        if cmd in ("/start", "/help"):
+            self.send_message(
+                chat_id,
+                "Ninja Publisher bot.\n\n"
+                "<b>/draft &lt;topic&gt;</b> — draft an article and send for approval.\n"
+                "Approve/Reject buttons appear on the draft card.",
+            )
+            return
+
+        # Non-command messages: ignore silently.
+        log.debug("ignoring non-command message from chat %s: %s", chat_id, text[:80])
 
     def _handle_callback(
         self,
