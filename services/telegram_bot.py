@@ -81,6 +81,20 @@ class TelegramBot:
 
         return self._send_message(text, reply_markup=keyboard)
 
+    def send_message(self, chat_id: str | int, text: str) -> dict:
+        """Send a plain text message to a chat. Returns the Telegram API response body."""
+        resp = self._session.post(
+            f"{self._base_url}/sendMessage",
+            json={
+                "chat_id": str(chat_id),
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=self._timeout,
+        )
+        return self._handle_response(resp, "sendMessage")
+
     def edit_message(self, message_id: int, text: str) -> dict:
         """Edit an existing message (remove keyboard, update text)."""
         resp = self._session.post(
@@ -112,10 +126,12 @@ class TelegramBot:
         on_approve: Callable[[str, int, str], None],
         on_reject: Callable[[str, int, str], None],
         poll_timeout: int = 30,
+        on_topic: Callable[[str, str, int], None] | None = None,
     ) -> None:
         """Start long-polling for callback queries in a daemon thread.
 
         Callbacks receive (page_id, message_id, callback_query_id).
+        on_topic receives (chat_id, topic_text, message_id).
         """
         if self._polling_thread is not None and self._polling_thread.is_alive():
             log.warning("polling thread already running")
@@ -124,7 +140,7 @@ class TelegramBot:
         self._stop_event.clear()
         self._polling_thread = threading.Thread(
             target=self._poll_loop,
-            args=(on_approve, on_reject, poll_timeout),
+            args=(on_approve, on_reject, poll_timeout, on_topic),
             daemon=True,
             name="telegram-approval-poll",
         )
@@ -195,7 +211,9 @@ class TelegramBot:
         on_approve: Callable[[str, int, str], None],
         on_reject: Callable[[str, int, str], None],
         poll_timeout: int,
+        on_topic: Callable[[str, str, int], None] | None = None,
     ) -> None:
+        allowed = '["callback_query","message"]' if on_topic else '["callback_query"]'
         offset = 0
         while not self._stop_event.is_set():
             try:
@@ -204,7 +222,7 @@ class TelegramBot:
                     params={
                         "offset": offset,
                         "timeout": poll_timeout,
-                        "allowed_updates": '["callback_query"]',
+                        "allowed_updates": allowed,
                     },
                     timeout=poll_timeout + 10,
                 )
@@ -222,9 +240,12 @@ class TelegramBot:
                 for update in body.get("result", []):
                     offset = update["update_id"] + 1
                     cb = update.get("callback_query")
-                    if not cb:
+                    if cb:
+                        self._handle_callback(cb, on_approve, on_reject)
                         continue
-                    self._handle_callback(cb, on_approve, on_reject)
+                    msg = update.get("message")
+                    if msg and on_topic:
+                        self._handle_message(msg, on_topic)
 
             except requests.RequestException as exc:
                 log.warning("polling error: %s", exc)
@@ -234,6 +255,28 @@ class TelegramBot:
                 log.exception("unexpected error in poll loop")
                 if not self._stop_event.is_set():
                     time.sleep(5)
+
+    def _handle_message(
+        self,
+        msg: dict,
+        on_topic: Callable[[str, str, int], None],
+    ) -> None:
+        """Handle an incoming text message as a topic request."""
+        text = (msg.get("text") or "").strip()
+        if not text:
+            return
+        # Ignore bot commands (e.g. /start, /help)
+        if text.startswith("/"):
+            return
+        chat = msg.get("chat", {})
+        chat_id = str(chat.get("id", ""))
+        message_id = msg.get("message_id", 0)
+        # Only handle messages from the configured chat
+        if chat_id != str(self.chat_id):
+            log.debug("ignoring message from chat %s (expected %s)", chat_id, self.chat_id)
+            return
+        log.info("topic request from chat %s: %s", chat_id, text[:80])
+        on_topic(chat_id, text, message_id)
 
     def _handle_callback(
         self,

@@ -419,3 +419,120 @@ def test_card_text_escapes_html_in_title():
     text = bot._build_card_text(article, "https://notion.so/abc")
     assert "&lt;b&gt;Bold&lt;/b&gt;" in text
     assert "&amp;" in text
+
+
+# ---- send_message ----
+
+
+@responses.activate
+def test_send_message():
+    responses.add(
+        responses.POST,
+        SEND_URL,
+        json={"ok": True, "result": {"message_id": 99}},
+        status=200,
+    )
+    bot = _bot()
+    result = bot.send_message(CHAT_ID, "Hello status update")
+
+    assert result["message_id"] == 99
+    body = json.loads(responses.calls[0].request.body)
+    assert body["chat_id"] == CHAT_ID
+    assert body["text"] == "Hello status update"
+    assert body["parse_mode"] == "HTML"
+
+
+# ---- message handling in poll loop ----
+
+
+def test_handle_message_calls_on_topic():
+    bot = _bot()
+    on_topic = MagicMock()
+    msg = {
+        "message_id": 200,
+        "text": "Write about AI agents",
+        "chat": {"id": int(CHAT_ID)},
+    }
+    bot._handle_message(msg, on_topic)
+    on_topic.assert_called_once_with(CHAT_ID, "Write about AI agents", 200)
+
+
+def test_handle_message_ignores_commands():
+    bot = _bot()
+    on_topic = MagicMock()
+    msg = {
+        "message_id": 201,
+        "text": "/start",
+        "chat": {"id": int(CHAT_ID)},
+    }
+    bot._handle_message(msg, on_topic)
+    on_topic.assert_not_called()
+
+
+def test_handle_message_ignores_empty():
+    bot = _bot()
+    on_topic = MagicMock()
+    msg = {
+        "message_id": 202,
+        "text": "",
+        "chat": {"id": int(CHAT_ID)},
+    }
+    bot._handle_message(msg, on_topic)
+    on_topic.assert_not_called()
+
+
+def test_handle_message_ignores_wrong_chat():
+    bot = _bot()
+    on_topic = MagicMock()
+    msg = {
+        "message_id": 203,
+        "text": "Some topic",
+        "chat": {"id": 9999999},
+    }
+    bot._handle_message(msg, on_topic)
+    on_topic.assert_not_called()
+
+
+@responses.activate
+def test_poll_loop_processes_messages():
+    """Verify _poll_loop dispatches text messages to on_topic."""
+    responses.add(
+        responses.GET,
+        GET_UPDATES_URL,
+        json={
+            "ok": True,
+            "result": [
+                {
+                    "update_id": 200,
+                    "message": {
+                        "message_id": 300,
+                        "text": "Write about butler agents",
+                        "chat": {"id": int(CHAT_ID)},
+                    },
+                },
+            ],
+        },
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        GET_UPDATES_URL,
+        json={"ok": True, "result": []},
+        status=200,
+    )
+
+    bot = _bot()
+    on_approve = MagicMock()
+    on_reject = MagicMock()
+    on_topic = MagicMock()
+
+    def _stop(*args, **kwargs):
+        bot._stop_event.set()
+
+    on_topic.side_effect = _stop
+
+    bot._poll_loop(on_approve, on_reject, poll_timeout=1, on_topic=on_topic)
+
+    on_topic.assert_called_once_with(CHAT_ID, "Write about butler agents", 300)
+    on_approve.assert_not_called()
+    on_reject.assert_not_called()

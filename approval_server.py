@@ -17,8 +17,10 @@ from typing import Any
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
 
-from base import BasePublisher
+from base import Article, BasePublisher
 from services import telegram_notify
+from services.article_drafter import ArticleDrafter
+from services.image_gen import generate_image
 from services.notion_client import NotionClient
 from services.slack_handler import (
     ACTION_APPROVE,
@@ -383,6 +385,61 @@ def dispatch_action(app: Flask, event: InteractionEvent) -> dict[str, Any]:
     return {"text": f":warning: unhandled action: {event.action_id}"}
 
 
+def handle_draft_request(
+    notion: NotionClient,
+    tg_bot: TelegramBot,
+    drafter: ArticleDrafter,
+    chat_id: str,
+    topic: str,
+    message_id: int,
+) -> None:
+    """Handle a topic request: draft article, gen image, save to Notion, send approval card."""
+    status_msg_id: int | None = None
+    try:
+        # 1. Acknowledge with a status message
+        result = tg_bot.send_message(chat_id, f"Drafting article on: {topic[:100]}")
+        status_msg_id = result.get("message_id")
+
+        # 2. Draft via Claude CLI
+        article = drafter.draft(topic)
+
+        # 3. Update status
+        if status_msg_id:
+            tg_bot.edit_message(status_msg_id, "Generating hero image...")
+
+        # 4. Generate hero image via MiniMax (optional — failure is non-fatal)
+        try:
+            image_bytes = generate_image(article.title)
+            # For now we don't have image upload; hero_image_url stays None
+            # Future: upload image_bytes to a CDN and set hero_image_url
+            _ = image_bytes
+        except Exception:  # noqa: BLE001
+            log.info("hero image generation skipped (non-fatal) for %r", article.title)
+
+        # 5. Save to Notion
+        if status_msg_id:
+            tg_bot.edit_message(status_msg_id, "Saving to Notion...")
+        page_id = notion.save_draft(article)
+        notion.update_status(page_id, "Ready")
+        article = Article(**{**article.__dict__, "notion_page_id": page_id})
+
+        # 6. Update status message
+        if status_msg_id:
+            tg_bot.edit_message(status_msg_id, "Draft ready! Sending for approval...")
+
+        # 7. Send approval card
+        notion_url = NOTION_PAGE_URL_TEMPLATE.format(page_id_nodashes=page_id.replace("-", ""))
+        tg_bot.send_approval_card(article, notion_url=notion_url)
+
+    except Exception as exc:  # noqa: BLE001
+        error_msg = f"Draft failed: {sanitize_error(exc)}"
+        log.exception("handle_draft_request failed for topic %r", topic[:80])
+        try:
+            tg_bot.send_message(chat_id, error_msg)
+        except Exception:  # noqa: BLE001
+            log.warning("failed to send error message to Telegram")
+
+
 def _build_default_app() -> Flask:
     load_dotenv(override=False)
     from publishers.medium import MediumPublisher
@@ -445,7 +502,16 @@ def _start_telegram_polling(
             daemon=True,
         ).start()
 
-    tg_bot.start_polling(on_approve, on_reject)
+    drafter = ArticleDrafter()
+
+    def on_topic(chat_id: str, topic_text: str, message_id: int) -> None:
+        threading.Thread(
+            target=handle_draft_request,
+            args=(notion, tg_bot, drafter, chat_id, topic_text, message_id),
+            daemon=True,
+        ).start()
+
+    tg_bot.start_polling(on_approve, on_reject, on_topic=on_topic)
 
 
 if __name__ == "__main__":  # pragma: no cover
