@@ -28,6 +28,7 @@ from services.slack_handler import (
     InteractionEvent,
     SlackHandler,
 )
+from services.telegram_bot import TelegramBot, TelegramBotError
 
 VERSION = "0.2.0"
 SLACK_REPLAY_WINDOW_SECONDS = 60 * 5
@@ -76,10 +77,7 @@ def verify_slack_signature(
     if abs(current - ts_int) > SLACK_REPLAY_WINDOW_SECONDS:
         raise SignatureError("timestamp outside replay window")
     basestring = b"v0:" + timestamp.encode() + b":" + raw_body
-    expected = (
-        "v0="
-        + hmac.new(signing_secret.encode(), basestring, hashlib.sha256).hexdigest()
-    )
+    expected = "v0=" + hmac.new(signing_secret.encode(), basestring, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
         raise SignatureError("signature mismatch")
 
@@ -100,6 +98,7 @@ def create_app(
     notion: NotionClient | None = None,
     notion_url_template: str = NOTION_PAGE_URL_TEMPLATE,
     medium_publisher: BasePublisher | None = None,
+    telegram_bot: TelegramBot | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["SIGNING_SECRET"] = signing_secret or os.environ.get("SLACK_SIGNING_SECRET", "")
@@ -107,6 +106,7 @@ def create_app(
     app.config["NOTION"] = notion
     app.config["NOTION_URL_TEMPLATE"] = notion_url_template
     app.config["MEDIUM_PUBLISHER"] = medium_publisher
+    app.config["TELEGRAM_BOT"] = telegram_bot
 
     @app.get("/health")
     def health() -> Response:
@@ -151,6 +151,42 @@ def create_app(
         # background thread that posts back via response_url.
         return jsonify(response_body)
 
+    @app.post("/trigger/check-ready")
+    def check_ready() -> tuple[Response, int] | Response:
+        """Query Notion for Ready articles and send Telegram approval cards."""
+        notion_client: NotionClient | None = app.config["NOTION"]
+        tg_bot: TelegramBot | None = app.config["TELEGRAM_BOT"]
+        tmpl: str = app.config["NOTION_URL_TEMPLATE"]
+
+        if notion_client is None:
+            return jsonify({"error": "notion not configured"}), 500
+        if tg_bot is None:
+            return jsonify({"error": "telegram bot not configured"}), 500
+
+        try:
+            articles = notion_client.query_rows_by_status("Ready")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("check-ready: failed to query Notion")
+            return jsonify({"error": "notion query failed", "detail": sanitize_error(exc)}), 500
+
+        sent = []
+        for article in articles:
+            if not article.notion_page_id:
+                continue
+            try:
+                notion_url = tmpl.format(page_id_nodashes=article.notion_page_id.replace("-", ""))
+                tg_bot.send_approval_card(article, notion_url=notion_url)
+                notion_client.update_status(article.notion_page_id, "Pending Approval")
+                sent.append(article.notion_page_id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "check-ready: failed to send card for %s: %s",
+                    article.notion_page_id,
+                    exc,
+                )
+
+        return jsonify({"sent": len(sent), "page_ids": sent})
+
     return app
 
 
@@ -165,9 +201,7 @@ def execute_publish(
 ) -> None:
     """Background thread target: fetch article, publish, update status."""
     if publisher is None:
-        slack.post_to_response_url(
-            response_url, "Publish failed: publisher not configured"
-        )
+        slack.post_to_response_url(response_url, "Publish failed: publisher not configured")
         return
 
     try:
@@ -189,9 +223,7 @@ def execute_publish(
         notion.update_status(page_id, "Published")
         slack.post_to_response_url(response_url, f"Published: {result.url}")
         try:
-            telegram.notify(
-                f"Published <b>{article.title}</b>: {result.url}"
-            )
+            telegram.notify(f"Published <b>{article.title}</b>: {result.url}")
         except Exception:  # noqa: BLE001 — fire-and-forget
             log.warning("telegram notify failed (non-fatal) for %s", page_id)
 
@@ -202,17 +234,93 @@ def execute_publish(
         except Exception:  # noqa: BLE001
             log.exception("failed to update Notion error state for %s", page_id)
         try:
-            slack.post_to_response_url(
-                response_url, f"Publish failed: {safe}"
-            )
+            slack.post_to_response_url(response_url, f"Publish failed: {safe}")
         except Exception:  # noqa: BLE001
             log.exception("failed to post error to Slack for %s", page_id)
         try:
-            telegram.notify(
-                f"Publish FAILED for {article_title}: {safe}", urgent=True
-            )
+            telegram.notify(f"Publish FAILED for {article_title}: {safe}", urgent=True)
         except Exception:  # noqa: BLE001 — fire-and-forget
             log.warning("telegram urgent notify failed for %s", page_id)
+
+
+def execute_telegram_publish(
+    notion: NotionClient,
+    publisher: BasePublisher | None,
+    tg_bot: TelegramBot,
+    page_id: str,
+    message_id: int,
+    callback_query_id: str,
+) -> None:
+    """Background thread target: publish via Telegram approval callback."""
+    try:
+        tg_bot.answer_callback_query(callback_query_id, "Publishing...")
+    except Exception:  # noqa: BLE001
+        log.warning("failed to answer callback query for %s", page_id)
+
+    if publisher is None:
+        tg_bot.edit_message(message_id, "Publish failed: publisher not configured")
+        return
+
+    try:
+        notion.update_status(page_id, "Publishing")
+        tg_bot.edit_message(message_id, "Publishing...")
+
+        # Double-tap guard
+        status = notion.get_status(page_id)
+        if status != "Publishing":
+            log.info(
+                "double-tap guard: page %s status is %r, skipping publish",
+                page_id,
+                status,
+            )
+            return
+
+        article = notion.get_article(page_id)
+        result = publisher.publish(article, images=[])
+
+        # Success
+        notion.save_platform_url(page_id, "medium", result.url)
+        notion.update_status(page_id, "Published")
+        tg_bot.edit_message(message_id, f"Published: {result.url}")
+        try:
+            telegram_notify.notify(f"Published <b>{article.title}</b>: {result.url}")
+        except Exception:  # noqa: BLE001
+            log.warning("telegram notify failed (non-fatal) for %s", page_id)
+
+    except Exception as exc:  # noqa: BLE001
+        safe = sanitize_error(exc)
+        try:
+            notion.log_error(page_id, "medium", safe)
+        except Exception:  # noqa: BLE001
+            log.exception("failed to update Notion error state for %s", page_id)
+        try:
+            tg_bot.edit_message(message_id, f"Publish failed: {safe}")
+        except Exception:  # noqa: BLE001
+            log.exception("failed to edit Telegram message for %s", page_id)
+        try:
+            telegram_notify.notify(f"Publish FAILED for {page_id}: {safe}", urgent=True)
+        except Exception:  # noqa: BLE001
+            log.warning("telegram urgent notify failed for %s", page_id)
+
+
+def handle_telegram_reject(
+    notion: NotionClient,
+    tg_bot: TelegramBot,
+    page_id: str,
+    message_id: int,
+    callback_query_id: str,
+) -> None:
+    """Handle a Telegram rejection callback."""
+    try:
+        tg_bot.answer_callback_query(callback_query_id, "Rejected")
+    except Exception:  # noqa: BLE001
+        log.warning("failed to answer callback query for %s", page_id)
+
+    try:
+        notion.update_status(page_id, "Rejected")
+        tg_bot.edit_message(message_id, "Rejected")
+    except Exception as exc:  # noqa: BLE001
+        log.exception("telegram reject failed for %s: %s", page_id, exc)
 
 
 def dispatch_action(app: Flask, event: InteractionEvent) -> dict[str, Any]:
@@ -273,6 +381,7 @@ def _build_default_app() -> Flask:
     slack_handler: SlackHandler | None = None
     notion_client: NotionClient | None = None
     medium_pub: BasePublisher | None = None
+    tg_bot: TelegramBot | None = None
     try:
         slack_handler = SlackHandler()
     except Exception as e:  # noqa: BLE001 — server must still boot for /health
@@ -285,11 +394,44 @@ def _build_default_app() -> Flask:
         medium_pub = MediumPublisher()
     except Exception as e:  # noqa: BLE001
         log.warning("MediumPublisher init deferred: %s", e)
-    return create_app(
+    try:
+        tg_bot = TelegramBot()
+    except TelegramBotError as e:
+        log.warning("TelegramBot init deferred: %s", e)
+
+    app = create_app(
         slack=slack_handler,
         notion=notion_client,
         medium_publisher=medium_pub,
+        telegram_bot=tg_bot,
     )
+
+    # Start Telegram approval polling if both bot and notion are available
+    if tg_bot is not None and notion_client is not None:
+        _start_telegram_polling(app, tg_bot, notion_client, medium_pub)
+
+    return app
+
+
+def _start_telegram_polling(
+    app: Flask,
+    tg_bot: TelegramBot,
+    notion: NotionClient,
+    publisher: BasePublisher | None,
+) -> None:
+    """Wire Telegram callback handlers and start long-polling."""
+
+    def on_approve(page_id: str, message_id: int, callback_query_id: str) -> None:
+        threading.Thread(
+            target=execute_telegram_publish,
+            args=(notion, publisher, tg_bot, page_id, message_id, callback_query_id),
+            daemon=True,
+        ).start()
+
+    def on_reject(page_id: str, message_id: int, callback_query_id: str) -> None:
+        handle_telegram_reject(notion, tg_bot, page_id, message_id, callback_query_id)
+
+    tg_bot.start_polling(on_approve, on_reject)
 
 
 if __name__ == "__main__":  # pragma: no cover
