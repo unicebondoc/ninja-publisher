@@ -6,7 +6,9 @@ Uses browser automation with a saved session (storage state JSON).
 
 from __future__ import annotations
 
+import logging
 import os
+import stat
 import time
 from typing import Any
 
@@ -14,6 +16,8 @@ import markdown
 from playwright.sync_api import sync_playwright
 
 from base import Article, BasePublisher, PublishError, PublishResult
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CANONICAL_BASE = "https://unicebondoc.com/blog"
 DEFAULT_SESSION_PATH = os.path.expanduser("~/.config/ninja-publisher/medium-session.json")
@@ -28,15 +32,6 @@ _TITLE_SELECTORS = [
     'h3[contenteditable="true"]',
     'h4[contenteditable="true"]',
     'div[role="textbox"]:first-of-type',
-]
-
-_BODY_SELECTORS = [
-    "div.ProseMirror",
-    'div[role="textbox"]',
-    'div[contenteditable="true"].section-content',
-    "article .section-inner",
-    'p[data-testid="editorParagraphParagraph"]',
-    "div.section-inner p",
 ]
 
 _PUBLISH_BUTTON_SELECTORS = [
@@ -89,6 +84,7 @@ class MediumPublisher(BasePublisher):
         self._validate_session()
 
         timeout_ms = self.timeout_seconds * 1000
+        pw = None
         browser = None
         page = None
 
@@ -160,13 +156,13 @@ class MediumPublisher(BasePublisher):
             except Exception:  # noqa: BLE001 — best-effort cleanup
                 pass
             try:
-                if pw:  # noqa: F821 — pw may not be bound if sync_playwright() fails
-                    pw.stop()  # type: ignore[possibly-undefined]
+                if pw:
+                    pw.stop()
             except Exception:  # noqa: BLE001
                 pass
 
     def _validate_session(self) -> None:
-        """Check that the session file exists and is readable."""
+        """Check that the session file exists, is readable, and has safe permissions."""
         if not os.path.isfile(self.session_path):
             raise PublishError(
                 self.platform,
@@ -177,6 +173,13 @@ class MediumPublisher(BasePublisher):
                     "error": f"Session file not found at {self.session_path}. "
                     "Run scripts/medium-login.sh to authenticate."
                 },
+            )
+        perms = stat.S_IMODE(os.stat(self.session_path).st_mode)
+        if perms & 0o177:  # anything beyond owner rw
+            log.warning(
+                "Session file %s has permissions %o, recommend chmod 600",
+                self.session_path,
+                perms,
             )
 
     def _type_title(self, page: Any, title: str) -> None:

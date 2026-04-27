@@ -82,7 +82,7 @@ def login_remote_debug(session_path: str, debug_port: int = 9222) -> bool:
             headless=False,
             args=[
                 f"--remote-debugging-port={debug_port}",
-                "--remote-debugging-address=0.0.0.0",
+                "--remote-debugging-address=127.0.0.1",
             ],
         )
         context = browser.new_context()
