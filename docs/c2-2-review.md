@@ -57,7 +57,7 @@ All 14 are required for Playwright Chromium per Playwright's own [Linux dependen
 ## Security
 
 - **No PPAs, no third-party sources.** The script calls `apt-get update` + `apt-get install`; whatever repos Ubuntu already had enabled is what's used. If you want to verify before running: `apt-cache policy` on Butler shows the active sources.
-- **No unattended mode weirdness.** `DEBIAN_FRONTEND=noninteractive` is set only on the `apt-get install` line so it doesn't block on a debconf prompt (e.g. a service-restart dialog). No `--force-yes`, no apt config overrides.
+- **No env-var passthrough to sudo.** Butler's sudoers uses `env_reset` with a minimal `env_keep` — passing `VAR=value` before `sudo` is rejected and exits the script via `set -e`. This script never prefixes env vars on a sudo line; `apt-get install -y` with no TTY on stdin is non-interactive enough for these 14 libs (no debconf prompts).
 - **No `curl | bash`.** Unlike C2.1's uv installer, this phase only uses apt.
 - **No shell expansions with user input.** `${MISSING[*]}` expands to the hardcoded `PKGS` list intersected with what's already installed — no user-controlled strings reach the `apt-get` args.
 
