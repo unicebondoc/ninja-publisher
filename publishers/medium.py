@@ -12,7 +12,6 @@ import stat
 import time
 from typing import Any
 
-import markdown
 from playwright.sync_api import sync_playwright
 
 from base import Article, BasePublisher, PublishError, PublishResult
@@ -43,13 +42,15 @@ _PUBLISH_BUTTON_SELECTORS = [
 _PUBLISH_CONFIRM_SELECTORS = [
     'button[data-testid="publishConfirmButton"]',
     'button:has-text("Publish now")',
-    'button:has-text("Publish"):visible >> nth=-1',
+    'button:has-text("Publish"):visible',
 ]
 
 _TAG_INPUT_SELECTORS = [
+    'input[placeholder*="topic"]',
     'input[placeholder*="tag"]',
     'input[data-testid="tagInput"]',
     'input[aria-label*="tag" i]',
+    'input[aria-label*="topic" i]',
 ]
 
 
@@ -121,20 +122,35 @@ class MediumPublisher(BasePublisher):
             page.keyboard.press("Tab")
             self._insert_body(page, article.body_markdown)
 
+            # Wait for Medium to auto-save the draft
+            page.wait_for_timeout(3000)
+
             if self.dry_run:
                 return self._handle_dry_run(page, browser, pw)
 
-            # Click publish button (opens dialog)
-            self._click_first_match(page, _PUBLISH_BUTTON_SELECTORS, "publish button")
+            # Click publish button (navigates to submission/preview page)
+            page.locator('button:has-text("Publish")').first.click()
 
-            # Add tags in the publish dialog (max 5)
+            # Wait for submission page to load
+            page.wait_for_timeout(5000)
+            if "submission" not in page.url:
+                # Retry — sometimes Medium is slow to navigate
+                page.wait_for_timeout(5000)
+            if "submission" not in page.url:
+                raise PublishError(
+                    self.platform,
+                    f"Expected submission page, got {page.url}",
+                    raw={"url": page.url},
+                )
+
+            # Add topics in the submission page (max 5)
             self._add_tags(page, article.tags[:5])
 
-            # Click final publish confirm
-            self._click_first_match(page, _PUBLISH_CONFIRM_SELECTORS, "publish confirm button")
+            # Click final Publish button on the submission page
+            page.locator('button:has-text("Publish")').first.click()
 
-            # Wait for navigation to published article
-            page.wait_for_url("**/p/**", timeout=timeout_ms)
+            # Wait for redirect to the published article
+            page.wait_for_timeout(8000)  # Medium takes a moment
             published_url = page.url
 
             browser.close()
@@ -205,32 +221,21 @@ class MediumPublisher(BasePublisher):
         page.keyboard.type(title, delay=10)
 
     def _insert_body(self, page: Any, body_markdown: str) -> None:
-        """Convert markdown to HTML and insert into the editor body."""
-        html = markdown.markdown(body_markdown, extensions=["extra", "codehilite"])
-        # Try to find the body editor and set content via clipboard paste
-        # approach, which triggers Medium's internal state better than innerHTML.
-        inserted = page.evaluate(
-            """(html) => {
-            const selectors = [
-                'div.ProseMirror',
-                'div[role="textbox"]',
-                'div[contenteditable="true"]',
-            ];
-            for (const sel of selectors) {
-                const el = document.querySelector(sel);
-                if (el) {
-                    el.innerHTML = html;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    return true;
-                }
-            }
-            return false;
-        }""",
-            html,
-        )
-        if not inserted:
-            # Fallback: just type the raw markdown
-            page.keyboard.type(body_markdown)
+        """Type the article body into Medium's editor using keyboard input.
+
+        We use keyboard typing instead of innerHTML because Medium's editor
+        must detect real input events to save the draft and enable the
+        Publish button. innerHTML bypasses Medium's internal state tracking.
+        """
+        # Type the body as plain text, line by line
+        # Medium will auto-format paragraphs
+        for line in body_markdown.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                page.keyboard.press("Enter")
+                continue
+            page.keyboard.type(stripped, delay=5)
+            page.keyboard.press("Enter")
 
     def _add_tags(self, page: Any, tags: list[str]) -> None:
         """Type tags into the publish dialog's tag input."""

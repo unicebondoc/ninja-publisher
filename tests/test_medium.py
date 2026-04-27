@@ -171,13 +171,22 @@ class TestPublishHappyPath:
         mock_pw, mock_pw_inst, mock_browser, mock_ctx, mock_page = _build_mock_chain()
         mock_sync_pw.return_value = mock_pw
 
-        # After clicking publish, page navigates to published URL
         published_url = "https://medium.com/@unice/ai-butler-on-hetzner-abc123"
 
-        def set_published_url(*args, **kwargs):
-            mock_page.url = published_url
+        # Simulate URL progression: new-story -> submission -> published
+        url_sequence = iter([
+            "https://medium.com/new-story",      # initial goto
+            "https://medium.com/p/abc/submission", # after first Publish click
+            "https://medium.com/p/abc/submission", # second check
+            published_url,                         # after confirm click
+        ])
 
-        mock_page.wait_for_url.side_effect = set_published_url
+        type(mock_page).url = property(lambda self: next(url_sequence, published_url))
+
+        # Mock locator chain for button clicks
+        mock_locator = MagicMock()
+        mock_page.locator.return_value = mock_locator
+        mock_locator.first = mock_locator
 
         pub = MediumPublisher(session_path=session_path)
         result = pub.publish(_article(), images=[])
@@ -186,7 +195,6 @@ class TestPublishHappyPath:
         assert result.url == published_url
         assert result.id is None
 
-        # Verify correct sequence
         mock_pw_inst.chromium.launch.assert_called_once_with(
             headless=False,
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
@@ -224,10 +232,17 @@ class TestPublishHappyPath:
         mock_pw, mock_pw_inst, mock_browser, mock_ctx, mock_page = _build_mock_chain()
         mock_sync_pw.return_value = mock_pw
 
-        def set_published_url(*args, **kwargs):
-            mock_page.url = "https://medium.com/@unice/test-abc"
+        url_sequence = iter([
+            "https://medium.com/new-story",
+            "https://medium.com/p/abc/submission",
+            "https://medium.com/p/abc/submission",
+            "https://medium.com/@unice/test-abc",
+        ])
+        type(mock_page).url = property(lambda self: next(url_sequence, "https://medium.com/@unice/test-abc"))
 
-        mock_page.wait_for_url.side_effect = set_published_url
+        mock_locator = MagicMock()
+        mock_page.locator.return_value = mock_locator
+        mock_locator.first = mock_locator
 
         # Track typed tags
         typed_tags = []
@@ -237,7 +252,6 @@ class TestPublishHappyPath:
 
         mock_page.keyboard.type = MagicMock(side_effect=track_type)
 
-        # query_selector returns tag_input for tag selectors
         original_qs = mock_page.query_selector.return_value
         mock_page.query_selector.return_value = original_qs
 
@@ -245,29 +259,26 @@ class TestPublishHappyPath:
         pub = MediumPublisher(session_path=session_path)
         pub.publish(art, images=[])
 
-        # The title + 5 tags should have been typed (not 7)
-        # Title is typed once, then 5 tags
         tag_type_calls = [c for c in typed_tags if c in ["a", "b", "c", "d", "e", "f", "g"]]
         assert len(tag_type_calls) <= 5
         assert "f" not in tag_type_calls
         assert "g" not in tag_type_calls
 
 
-class TestHtmlConversion:
+class TestBodyInsertion:
     @patch("publishers.medium.sync_playwright")
-    def test_publish_html_conversion(self, mock_sync_pw, tmp_path):
+    def test_body_typed_via_keyboard(self, mock_sync_pw, tmp_path):
         session_path = _make_session_file(tmp_path)
         mock_pw, mock_pw_inst, mock_browser, mock_ctx, mock_page = _build_mock_chain()
         mock_sync_pw.return_value = mock_pw
 
+        typed = []
+        mock_page.keyboard.type = MagicMock(side_effect=lambda text, **kw: typed.append(text))
+
         pub = MediumPublisher(session_path=session_path, dry_run=True)
-        art = _article(body_markdown="**bold text** and `code`")
+        art = _article(body_markdown="First line\n\nSecond line")
         pub.publish(art, images=[])
 
-        # Verify page.evaluate was called with HTML (not raw markdown)
-        evaluate_calls = mock_page.evaluate.call_args_list
-        assert len(evaluate_calls) > 0
-        # The HTML argument should contain <strong> from markdown conversion
-        html_arg = evaluate_calls[0][0][1]  # second positional arg
-        assert "<strong>" in html_arg or "<b>" in html_arg
-        assert "<code>" in html_arg
+        # Body content should have been typed via keyboard
+        assert "First line" in typed
+        assert "Second line" in typed
