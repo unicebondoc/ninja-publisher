@@ -64,8 +64,8 @@ def verify_session(session_path: str) -> bool:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(storage_state=session_path)
         page = context.new_page()
-        page.goto("https://medium.com/new-story")
-        page.wait_for_load_state("networkidle")
+        page.goto("https://medium.com/new-story", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(3000)  # let redirects settle
         ok = "/m/signin" not in page.url
         browser.close()
         if ok:
@@ -79,7 +79,7 @@ def login_remote_debug(session_path: str, debug_port: int = 9222) -> bool:
     """Launch Chromium with remote debugging for login from another machine."""
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False,
+            headless=True,
             args=[
                 f"--remote-debugging-port={debug_port}",
                 "--remote-debugging-address=127.0.0.1",
@@ -87,7 +87,7 @@ def login_remote_debug(session_path: str, debug_port: int = 9222) -> bool:
         )
         context = browser.new_context()
         page = context.new_page()
-        page.goto("https://medium.com")
+        page.goto("https://medium.com", wait_until="domcontentloaded", timeout=60000)
 
         print(f"Remote debugging available at http://localhost:{debug_port}")  # noqa: T201
         print("Connect from your local machine via SSH tunnel:")  # noqa: T201

@@ -187,9 +187,12 @@ class TestPublishHappyPath:
         assert result.id is None
 
         # Verify correct sequence
-        mock_pw_inst.chromium.launch.assert_called_once_with(headless=True)
+        mock_pw_inst.chromium.launch.assert_called_once_with(
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+        )
         mock_browser.new_context.assert_called_once_with(storage_state=session_path)
-        mock_page.goto.assert_called_with("https://medium.com/new-story", wait_until="networkidle")
+        mock_page.goto.assert_called_with("https://medium.com/new-story", wait_until="domcontentloaded")
         mock_page.keyboard.press.assert_any_call("Tab")
 
     @patch("publishers.medium.sync_playwright")

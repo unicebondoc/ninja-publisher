@@ -74,7 +74,14 @@ if [ "${ENV_WARNINGS}" -gt 0 ]; then
 fi
 
 # Check required secrets are non-empty
-REQUIRED_KEYS=(MEDIUM_TOKEN MINIMAX_API_KEY NOTION_TOKEN SLACK_BOT_TOKEN SLACK_SIGNING_SECRET TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID)
+REQUIRED_KEYS=(MINIMAX_API_KEY NOTION_TOKEN SLACK_BOT_TOKEN SLACK_SIGNING_SECRET TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID)
+OPTIONAL_KEYS=(MEDIUM_TOKEN)
+for key in "${OPTIONAL_KEYS[@]}"; do
+    val=$(grep "^${key}=" "${ENV_FILE}" | head -1 | cut -d= -f2-)
+    if [ -z "${val}" ]; then
+        echo "NOTE: ${key} is empty — Medium publishing will be disabled (graceful fallback)"
+    fi
+done
 MISSING=0
 for key in "${REQUIRED_KEYS[@]}"; do
     val=$(grep "^${key}=" "${ENV_FILE}" | head -1 | cut -d= -f2-)

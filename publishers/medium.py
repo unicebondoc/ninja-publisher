@@ -90,13 +90,20 @@ class MediumPublisher(BasePublisher):
 
         try:
             pw = sync_playwright().start()
-            browser = pw.chromium.launch(headless=True)
+            # Use non-headless mode — Cloudflare Turnstile blocks headless.
+            # Requires xvfb (virtual display) on headless VPS.
+            # systemd unit should use: ExecStart=xvfb-run ... python ... approval_server.py
+            browser = pw.chromium.launch(
+                headless=False,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            )
             context = browser.new_context(storage_state=self.session_path)
             context.set_default_timeout(timeout_ms)
             page = context.new_page()
 
             # Navigate to editor
-            page.goto("https://medium.com/new-story", wait_until="networkidle")
+            page.goto("https://medium.com/new-story", wait_until="domcontentloaded")
+            page.wait_for_timeout(5000)  # let Medium's JS + redirects settle
 
             # Detect login redirect
             if "/m/signin" in page.url:

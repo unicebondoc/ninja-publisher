@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 !.env.template
+medium-session.json
 
 # Python
 __pycache__/
