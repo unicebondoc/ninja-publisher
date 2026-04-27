@@ -62,7 +62,7 @@ def _page(**prop_overrides) -> dict:
         "Title": {"title": [{"plain_text": "T"}]},
         "Slug": {"rich_text": [{"plain_text": "t-slug"}]},
         "Body": {"rich_text": [{"plain_text": "# body"}]},
-        "Tags": {"multi_select": [{"name": "ai"}, {"name": "ops"}]},
+        "Topic": {"multi_select": [{"name": "ai"}, {"name": "ops"}]},
         "Subtitle": {"rich_text": []},
         "Hero Image URL": {"url": "https://cdn.example/h.jpg"},
         "Hook Options": {"rich_text": [{"plain_text": "h1\nh2\nh3"}]},
@@ -147,7 +147,7 @@ def test_save_draft_builds_properties(notion, fake_client):
     props = call["properties"]
     assert props["Title"]["title"][0]["text"]["content"] == "Hello"
     assert props["Slug"]["rich_text"][0]["text"]["content"] == "hello"
-    assert props["Tags"] == {"multi_select": [{"name": "a"}, {"name": "b"}]}
+    assert props["Topic"] == {"multi_select": [{"name": "a"}, {"name": "b"}]}
     assert props["Hero Image URL"] == {"url": "https://h"}
     assert "\n".join(["one", "two"]) in props["Hook Options"]["rich_text"][0]["text"]["content"]
     assert props["Selected Hook"] == {"number": 1}

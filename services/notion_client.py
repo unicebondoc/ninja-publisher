@@ -26,7 +26,7 @@ class NotionClient:
         "slug": "Slug",
         "status": "Status",
         "body": "Body",
-        "tags": "Tags",
+        "tags": "Topic",
         "subtitle": "Subtitle",
         "hero_image_url": "Hero Image URL",
         "hook_options": "Hook Options",
