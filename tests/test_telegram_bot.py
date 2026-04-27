@@ -243,12 +243,12 @@ def test_handle_callback_approve():
 
     cb = {
         "id": "cb-001",
-        "data": "approve:page-xyz",
+        "data": "approve:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
         "message": {"message_id": 99},
     }
     bot._handle_callback(cb, on_approve, on_reject)
 
-    on_approve.assert_called_once_with("page-xyz", 99, "cb-001")
+    on_approve.assert_called_once_with("a1b2c3d4-e5f6-7890-abcd-ef1234567890", 99, "cb-001")
     on_reject.assert_not_called()
 
 
@@ -259,12 +259,12 @@ def test_handle_callback_reject():
 
     cb = {
         "id": "cb-002",
-        "data": "reject:page-abc",
+        "data": "reject:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
         "message": {"message_id": 55},
     }
     bot._handle_callback(cb, on_approve, on_reject)
 
-    on_reject.assert_called_once_with("page-abc", 55, "cb-002")
+    on_reject.assert_called_once_with("a1b2c3d4-e5f6-7890-abcd-ef1234567890", 55, "cb-002")
     on_approve.assert_not_called()
 
 
@@ -275,7 +275,24 @@ def test_handle_callback_unknown_action():
 
     cb = {
         "id": "cb-003",
-        "data": "unknown:page-abc",
+        "data": "unknown:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "message": {"message_id": 1},
+    }
+    bot._handle_callback(cb, on_approve, on_reject)
+
+    on_approve.assert_not_called()
+    on_reject.assert_not_called()
+
+
+def test_handle_callback_invalid_uuid_rejected():
+    """callback_data with non-UUID page_id is silently ignored."""
+    bot = _bot()
+    on_approve = MagicMock()
+    on_reject = MagicMock()
+
+    cb = {
+        "id": "cb-005",
+        "data": "approve:not-a-valid-uuid",
         "message": {"message_id": 1},
     }
     bot._handle_callback(cb, on_approve, on_reject)
@@ -312,7 +329,7 @@ def test_poll_loop_processes_callbacks():
                     "update_id": 100,
                     "callback_query": {
                         "id": "cb-poll-1",
-                        "data": "approve:page-poll",
+                        "data": "approve:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                         "message": {"message_id": 77},
                     },
                 },
@@ -320,7 +337,7 @@ def test_poll_loop_processes_callbacks():
                     "update_id": 101,
                     "callback_query": {
                         "id": "cb-poll-2",
-                        "data": "reject:page-poll-2",
+                        "data": "reject:b2c3d4e5-f6a7-8901-bcde-f12345678901",
                         "message": {"message_id": 78},
                     },
                 },
@@ -350,8 +367,8 @@ def test_poll_loop_processes_callbacks():
 
     bot._poll_loop(on_approve, on_reject, poll_timeout=1)
 
-    on_approve.assert_called_once_with("page-poll", 77, "cb-poll-1")
-    on_reject.assert_called_once_with("page-poll-2", 78, "cb-poll-2")
+    on_approve.assert_called_once_with("a1b2c3d4-e5f6-7890-abcd-ef1234567890", 77, "cb-poll-1")
+    on_reject.assert_called_once_with("b2c3d4e5-f6a7-8901-bcde-f12345678901", 78, "cb-poll-2")
 
 
 def test_start_polling_creates_daemon_thread():

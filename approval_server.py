@@ -154,6 +154,12 @@ def create_app(
     @app.post("/trigger/check-ready")
     def check_ready() -> tuple[Response, int] | Response:
         """Query Notion for Ready articles and send Telegram approval cards."""
+        trigger_secret = os.environ.get("TRIGGER_SECRET", "")
+        if trigger_secret:
+            provided = request.headers.get("X-Trigger-Secret", "")
+            if not hmac.compare_digest(trigger_secret, provided):
+                return jsonify({"error": "unauthorized"}), 401
+
         notion_client: NotionClient | None = app.config["NOTION"]
         tg_bot: TelegramBot | None = app.config["TELEGRAM_BOT"]
         tmpl: str = app.config["NOTION_URL_TEMPLATE"]
@@ -262,10 +268,8 @@ def execute_telegram_publish(
         return
 
     try:
-        notion.update_status(page_id, "Publishing")
-        tg_bot.edit_message(message_id, "Publishing...")
-
-        # Double-tap guard
+        # Double-tap guard: status is set to "Publishing" in on_approve
+        # before this thread starts. If it changed, another thread handled it.
         status = notion.get_status(page_id)
         if status != "Publishing":
             log.info(
@@ -275,6 +279,8 @@ def execute_telegram_publish(
             )
             return
 
+        tg_bot.edit_message(message_id, "Publishing...")
+
         article = notion.get_article(page_id)
         result = publisher.publish(article, images=[])
 
@@ -283,6 +289,9 @@ def execute_telegram_publish(
         notion.update_status(page_id, "Published")
         tg_bot.edit_message(message_id, f"Published: {result.url}")
         try:
+            # telegram_notify used as module import (not parameter) because this
+            # path has no Slack response_url — the ops channel notification is
+            # fire-and-forget and does not need injection for testability.
             telegram_notify.notify(f"Published <b>{article.title}</b>: {result.url}")
         except Exception:  # noqa: BLE001
             log.warning("telegram notify failed (non-fatal) for %s", page_id)
@@ -422,6 +431,7 @@ def _start_telegram_polling(
     """Wire Telegram callback handlers and start long-polling."""
 
     def on_approve(page_id: str, message_id: int, callback_query_id: str) -> None:
+        notion.update_status(page_id, "Publishing")
         threading.Thread(
             target=execute_telegram_publish,
             args=(notion, publisher, tg_bot, page_id, message_id, callback_query_id),
@@ -429,7 +439,11 @@ def _start_telegram_polling(
         ).start()
 
     def on_reject(page_id: str, message_id: int, callback_query_id: str) -> None:
-        handle_telegram_reject(notion, tg_bot, page_id, message_id, callback_query_id)
+        threading.Thread(
+            target=handle_telegram_reject,
+            args=(notion, tg_bot, page_id, message_id, callback_query_id),
+            daemon=True,
+        ).start()
 
     tg_bot.start_polling(on_approve, on_reject)
 

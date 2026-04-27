@@ -53,6 +53,34 @@ def publisher():
 # ---- /trigger/check-ready ----
 
 
+def test_check_ready_rejects_bad_trigger_secret(notion, tg_bot, monkeypatch):
+    monkeypatch.setenv("TRIGGER_SECRET", "my-secret-123")
+    app = create_app(signing_secret="s", notion=notion, telegram_bot=tg_bot)
+    client = app.test_client()
+
+    # No header
+    r = client.post("/trigger/check-ready")
+    assert r.status_code == 401
+
+    # Wrong header
+    r = client.post("/trigger/check-ready", headers={"X-Trigger-Secret": "wrong"})
+    assert r.status_code == 401
+
+    # Correct header
+    notion.query_rows_by_status.return_value = []
+    r = client.post("/trigger/check-ready", headers={"X-Trigger-Secret": "my-secret-123"})
+    assert r.status_code == 200
+
+
+def test_check_ready_allows_all_when_no_secret(notion, tg_bot, monkeypatch):
+    monkeypatch.delenv("TRIGGER_SECRET", raising=False)
+    notion.query_rows_by_status.return_value = []
+    app = create_app(signing_secret="s", notion=notion, telegram_bot=tg_bot)
+    client = app.test_client()
+    r = client.post("/trigger/check-ready")
+    assert r.status_code == 200
+
+
 def test_check_ready_no_notion():
     app = create_app(signing_secret="s", telegram_bot=MagicMock(spec=TelegramBot))
     client = app.test_client()
@@ -149,7 +177,6 @@ def test_telegram_publish_success(notion, tg_bot, publisher):
     execute_telegram_publish(notion, publisher, tg_bot, "page-abc-123", 42, "cb-001")
 
     tg_bot.answer_callback_query.assert_called_once_with("cb-001", "Publishing...")
-    notion.update_status.assert_any_call("page-abc-123", "Publishing")
     notion.update_status.assert_any_call("page-abc-123", "Published")
     notion.save_platform_url.assert_called_once_with(
         "page-abc-123", "medium", "https://medium.com/@test/article-123"

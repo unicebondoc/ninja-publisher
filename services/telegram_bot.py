@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 import time
+import uuid as _uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -250,6 +251,12 @@ class TelegramBot:
             return
 
         action, page_id = data.split(":", 1)
+
+        try:
+            _uuid.UUID(page_id)
+        except ValueError:
+            log.warning("Invalid page_id in callback_data: %s", page_id[:50])
+            return
 
         if action == "approve":
             log.info("approval callback for page %s", page_id)
